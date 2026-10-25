@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import time
 
 from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
 from fastapi.staticfiles import StaticFiles
@@ -6,6 +7,8 @@ from sqlalchemy import select
 import uvicorn
 from dotenv import load_dotenv
 import os
+
+import logging
 from database import AsyncSession,engine,get_db_session,init_db
 from tables import ProductModel, Users
 from auth import router as auth_router
@@ -19,6 +22,7 @@ from helpers.products.productHelpers import (
     product_response,
     soft_delete_product,
 )
+
 
 
 
@@ -46,6 +50,54 @@ PRODUCTS_CACHE = "products"
 
 app.mount("/static", StaticFiles(directory=upload_path), name="static")
 
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+logger = logging.getLogger(__name__)
+
+
+@app.middleware("http")
+async def logging_middleware(request: Request, call_next):
+    start_time = time.perf_counter()
+
+    logger.info(
+        "Request received | Method: %s | URL: %s",
+        request.method,
+        request.url
+    )
+
+    try:
+        response = await call_next(request)
+
+        process_time = (time.perf_counter() - start_time) * 1000
+
+        logger.info(
+            "Response sent | Method: %s | URL: %s | Status: %s | Time: %.2f ms",
+            request.method,
+            request.url,
+            response.status_code,
+            process_time
+        )
+
+        response.headers["X-Process-Time"] = f"{process_time:.2f} ms"
+
+        return response
+
+    except Exception:
+        process_time = (time.perf_counter() - start_time) * 1000
+
+        logger.exception(
+            "Request failed | Method: %s | URL: %s | Time: %.2f ms",
+            request.method,
+            request.url,
+            process_time
+        )
+
+        raise
 
 @app.get('/')
 def index():
