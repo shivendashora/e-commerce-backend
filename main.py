@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 import time
 
 from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 import uvicorn
@@ -22,7 +23,34 @@ from helpers.products.productHelpers import (
     product_response,
     soft_delete_product,
 )
+from starlette.middleware.base import BaseHTTPMiddleware
 
+class CustomRateLimiter(BaseHTTPMiddleware):
+
+    def __init__(self, app, request_limit: int = 60, limit_window: int = 60):
+        super().__init__(app)
+        self.request_limit = request_limit
+        self.limit_window = limit_window
+        self.counter = 0
+        self.window_start = time.monotonic()
+
+    async def dispatch(self, request: Request, call_next):
+        now = time.monotonic()
+
+        if now - self.window_start >= self.limit_window:
+            self.window_start = now        
+            self.counter = 0
+
+        if self.counter >= self.request_limit:
+            retry_after = int(self.limit_window - (now - self.window_start)) + 1
+            return JSONResponse(
+                status_code=429,
+                content={"message": "Server busy, try again later"},
+                headers={"Retry-After": str(retry_after)},
+            )
+
+        self.counter += 1
+        return await call_next(request)
 
 
 
@@ -37,9 +65,10 @@ async def lifecycle(app: FastAPI):
 
 app = FastAPI(
     lifespan = lifecycle,
-    swagger_ui_parameters = {"persistAuthorization": True}
+    swagger_ui_parameters = {"persistAuthorization": True},
 )
 app.include_router(auth_router)
+app.add_middleware(CustomRateLimiter)
 FastAPIRedis(app).lifespan().caching()
 load_dotenv()
 

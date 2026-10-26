@@ -14,6 +14,10 @@ An async REST API for listing and managing products. It includes JWT authenticat
 
 FastAPI · SQLAlchemy 2 (async) · asyncpg · PostgreSQL · Redis · PyJWT · bcrypt
 
+## Architecture
+
+The architecture diagram is on Lucidchart: [view the diagram](https://lucid.app/lucidchart/0a96cc86-e409-47b7-9603-dd8f67cdcb86/view).
+
 ## Project structure
 
 ```
