@@ -10,3 +10,4 @@ bcrypt==5.0.0
 PyJWT==2.15.1
 redis==8.1.0
 fastapi-redis-sdk==0.9.1
+bullmq==3.4.5

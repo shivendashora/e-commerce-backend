@@ -24,6 +24,13 @@ from helpers.products.productHelpers import (
     soft_delete_product,
 )
 from starlette.middleware.base import BaseHTTPMiddleware
+from bullmq import Queue
+import redis.asyncio as aioredis
+
+
+redis_conn = aioredis.from_url("redis://localhost:6379")
+
+queue = Queue("payment-queue", {"connection" : redis_conn})
 
 class CustomRateLimiter(BaseHTTPMiddleware):
 
@@ -255,7 +262,13 @@ async def delete_product(
 
 
 @app.post('/trigger-payment')
-def triggerPayment():
+async def triggerPayment():
+
+
+
+    await queue.add("process-payment",{
+        "payment_id":1
+    })
     return{
         "message":"Payment Successfull"
     }
