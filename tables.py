@@ -59,11 +59,15 @@ class Users(BaseColumn,base):
     is_active = Column(Boolean, default=True, nullable=False)
 
 
-class Payments(BaseColumn,base):
+class PaymentsModel(BaseColumn,base):
     __tablename__ = "payments"
 
     id = Column(Integer,primary_key=True)
-    product_id = Column(Integer,ForeignKey("products.id"))
-    quantity = Column(Integer)
-    cost = Column(Integer)
-    paymentStatus = Column(Integer)
+    product_id = Column(Integer,ForeignKey("products.id"),nullable=False)
+    quantity = Column(Integer,nullable=False)
+    cost = Column(Integer,nullable=False)
+    paymentStatus = Column(String(20),nullable=False,default="created")
+    paidTo = Column(Integer,ForeignKey("users.id"),nullable=False)
+    paidBy = Column(Integer,ForeignKey("users.id"),nullable=False)
+    razorpay_order_id = Column(String(64),nullable=False,unique=True,index=True)
+    razorpay_payment_id = Column(String(64),nullable=True,unique=True)

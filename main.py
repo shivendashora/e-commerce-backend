@@ -1,9 +1,10 @@
 from contextlib import asynccontextmanager
 import time
 
-from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+import razorpay
 from sqlalchemy import select
 import uvicorn
 from dotenv import load_dotenv
@@ -11,7 +12,8 @@ import os
 
 import logging
 from database import AsyncSession,engine,get_db_session,init_db
-from tables import ProductModel, Users
+from model import PaymentRequest, VerifyPaymentRequest
+from tables import PaymentsModel, ProductModel, Users
 from auth import router as auth_router
 from helpers.auth.authHelpers import get_current_user
 from helpers.files.storeFiles import storeFiles, deleteStoredFile
@@ -23,14 +25,15 @@ from helpers.products.productHelpers import (
     product_response,
     soft_delete_product,
 )
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
-from bullmq import Queue
-import redis.asyncio as aioredis
-
-
-redis_conn = aioredis.from_url("redis://localhost:6379")
-
-queue = Queue("payment-queue", {"connection" : redis_conn})
+from helpers.payment.paymentHelpers import (
+    amount_in_paise,
+    create_order,
+    get_live_product,
+    get_user_payment,
+    is_signature_valid,
+)
 
 class CustomRateLimiter(BaseHTTPMiddleware):
 
@@ -81,10 +84,23 @@ load_dotenv()
 
 port = int(os.getenv("port"))
 upload_path = os.getenv("upload_dir")
+TEST_KEY = os.getenv("TEST_KEY")
+TEST_KEY_SECRET = os.getenv("TEST_KEY_SECRET")
 PRODUCTS_CACHE = "products"
 
 
 app.mount("/static", StaticFiles(directory=upload_path), name="static")
+
+if not TEST_KEY or not TEST_KEY_SECRET:
+    raise RuntimeError("Razorpay API keys are missing")
+
+
+
+client = razorpay.Client(
+    auth=(TEST_KEY, TEST_KEY_SECRET)
+)
+
+
 
 
 
@@ -262,15 +278,81 @@ async def delete_product(
 
 
 @app.post('/trigger-payment')
-async def triggerPayment():
+async def triggerPayment(
+    payment : PaymentRequest,
+    session: AsyncSession = Depends(get_db_session),
+    current_user: Users = Depends(get_current_user)
+):
+    product = await get_live_product(session, payment.product_id)
+
+    if product.addedBy == current_user.id:
+        raise HTTPException(status_code=400, detail="You cannot buy your own product")
+
+    amount = amount_in_paise(product.price, payment.quantity)
+    receipt = f"u{current_user.id}-p{product.id}-{int(time.time())}"
+
+    try:
+        # razorpay's client is blocking; run it off the event loop but still wait for it
+        order = await run_in_threadpool(create_order, client, amount, receipt)
+    except Exception:
+        logger.exception("Razorpay order creation failed | product: %s", product.id)
+        raise HTTPException(status_code=502, detail="Could not create payment order")
+
+    new_payment = PaymentsModel(
+        product_id=product.id,
+        quantity=payment.quantity,
+        cost=amount,
+        paymentStatus="created",
+        paidTo=product.addedBy,
+        paidBy=current_user.id,
+        razorpay_order_id=order["id"],
+    )
+    session.add(new_payment)
+    await session.commit()
+    await session.refresh(new_payment)
+
+    return {
+        "message": "Order created",
+        "payment_id": new_payment.id,
+        "order_id": order["id"],
+        "amount": amount,
+        "currency": order["currency"],
+        "key": TEST_KEY,
+    }
 
 
+@app.post('/verify-payment')
+async def verifyPayment(
+    body : VerifyPaymentRequest,
+    session: AsyncSession = Depends(get_db_session),
+    current_user: Users = Depends(get_current_user)
+):
+    payment = await get_user_payment(session, body.razorpay_order_id, current_user)
 
-    await queue.add("process-payment",{
-        "payment_id":1
-    })
-    return{
-        "message":"Payment Successfull"
+    # repeat calls (e.g. client retries) return the stored result instead of re-verifying
+    if payment.paymentStatus == "paid":
+        return {"message": "Payment already verified", "payment_id": payment.id}
+
+    valid = is_signature_valid(
+        client,
+        body.razorpay_order_id,
+        body.razorpay_payment_id,
+        body.razorpay_signature
+    )
+
+    if not valid:
+        payment.paymentStatus = "failed"
+        await session.commit()
+        raise HTTPException(status_code=400, detail="Payment verification failed")
+
+    payment.paymentStatus = "paid"
+    payment.razorpay_payment_id = body.razorpay_payment_id
+    await session.commit()
+
+    return {
+        "message": "Payment successful",
+        "payment_id": payment.id,
+        "status": payment.paymentStatus,
     }
 
 
