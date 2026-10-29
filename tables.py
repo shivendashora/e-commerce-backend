@@ -69,5 +69,6 @@ class PaymentsModel(BaseColumn,base):
     paymentStatus = Column(String(20),nullable=False,default="created")
     paidTo = Column(Integer,ForeignKey("users.id"),nullable=False)
     paidBy = Column(Integer,ForeignKey("users.id"),nullable=False)
-    razorpay_order_id = Column(String(64),nullable=False,unique=True,index=True)
-    razorpay_payment_id = Column(String(64),nullable=True,unique=True)
+    # one razorpay order covers a whole cart, so every row of that cart shares these ids
+    razorpay_order_id = Column(String(64),nullable=False,index=True)
+    razorpay_payment_id = Column(String(64),nullable=True)

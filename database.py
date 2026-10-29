@@ -32,6 +32,21 @@ async def init_db() -> None:
         # needed by the trigram index on products.name
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         await conn.run_sync(base.metadata.create_all)
+        # payments used to be one row per order; drop the old unique rules so a cart's rows can share ids
+        await conn.execute(text(
+            "ALTER TABLE IF EXISTS payments DROP CONSTRAINT IF EXISTS payments_razorpay_payment_id_key"
+        ))
+        await conn.execute(text("""
+            DO $$ BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM pg_indexes
+                    WHERE indexname = 'ix_payments_razorpay_order_id'
+                      AND indexdef LIKE 'CREATE UNIQUE%'
+                ) THEN
+                    DROP INDEX ix_payments_razorpay_order_id;
+                END IF;
+            END $$;
+        """))
         # create_all skips tables that already exist, so add any new indexes on them too
         await conn.run_sync(_create_missing_indexes)
 

@@ -6,17 +6,20 @@ from database import AsyncSession
 from tables import PaymentsModel, ProductModel, Users
 
 
-async def get_live_product(session: AsyncSession, product_id: int) -> ProductModel:
+async def get_live_products(session: AsyncSession, product_ids: list[int]) -> dict[int, ProductModel]:
+    # one IN query for the whole cart instead of a round trip per product
     result = await session.execute(
         select(ProductModel).where(
-            ProductModel.id == product_id,
+            ProductModel.id.in_(product_ids),
             ProductModel.deletedAt.is_(None)
         )
     )
-    product = result.scalar_one_or_none()
-    if product is None:
-        raise HTTPException(status_code=404, detail="Product not found")
-    return product
+    products = {product.id: product for product in result.scalars().all()}
+
+    missing = [product_id for product_id in product_ids if product_id not in products]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Products not found: {missing}")
+    return products
 
 
 def amount_in_paise(price: float, quantity: int) -> int:
@@ -49,18 +52,18 @@ def is_signature_valid(
         return False
 
 
-async def get_user_payment(
+async def get_user_payments(
     session: AsyncSession,
     razorpay_order_id: str,
     user: Users
-) -> PaymentsModel:
+) -> list[PaymentsModel]:
     result = await session.execute(
         select(PaymentsModel).where(
             PaymentsModel.razorpay_order_id == razorpay_order_id,
             PaymentsModel.paidBy == user.id
         )
     )
-    payment = result.scalar_one_or_none()
-    if payment is None:
+    payments = list(result.scalars().all())
+    if not payments:
         raise HTTPException(status_code=404, detail="Payment not found")
-    return payment
+    return payments

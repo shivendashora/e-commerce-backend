@@ -30,8 +30,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from helpers.payment.paymentHelpers import (
     amount_in_paise,
     create_order,
-    get_live_product,
-    get_user_payment,
+    get_live_products,
+    get_user_payments,
     is_signature_valid,
 )
 
@@ -283,37 +283,51 @@ async def triggerPayment(
     session: AsyncSession = Depends(get_db_session),
     current_user: Users = Depends(get_current_user)
 ):
-    product = await get_live_product(session, payment.product_id)
+    # the same product listed twice in a cart is merged into one line
+    quantities: dict[int, int] = {}
+    for item in payment.PaymentRequest:
+        quantities[item.product_id] = quantities.get(item.product_id, 0) + item.quantity
 
-    if product.addedBy == current_user.id:
-        raise HTTPException(status_code=400, detail="You cannot buy your own product")
+    products = await get_live_products(session, list(quantities))
 
-    amount = amount_in_paise(product.price, payment.quantity)
-    receipt = f"u{current_user.id}-p{product.id}-{int(time.time())}"
+    line_costs: dict[int, int] = {}
+    for product_id, quantity in quantities.items():
+        product = products[product_id]
+        if product.addedBy == current_user.id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"You cannot buy your own product: {product_id}"
+            )
+        line_costs[product_id] = amount_in_paise(product.price, quantity)
+
+    # one razorpay order for the whole cart so the user pays once
+    amount = sum(line_costs.values())
+    receipt = f"u{current_user.id}-n{len(quantities)}-{int(time.time())}"
 
     try:
         # razorpay's client is blocking; run it off the event loop but still wait for it
         order = await run_in_threadpool(create_order, client, amount, receipt)
     except Exception:
-        logger.exception("Razorpay order creation failed | product: %s", product.id)
+        logger.exception("Razorpay order creation failed | products: %s", list(quantities))
         raise HTTPException(status_code=502, detail="Could not create payment order")
 
-    new_payment = PaymentsModel(
-        product_id=product.id,
-        quantity=payment.quantity,
-        cost=amount,
-        paymentStatus="created",
-        paidTo=product.addedBy,
-        paidBy=current_user.id,
-        razorpay_order_id=order["id"],
-    )
-    session.add(new_payment)
+    new_payments = []
+    for product_id, quantity in quantities.items():
+        new_payments.append(PaymentsModel(
+            product_id=product_id,
+            quantity=quantity,
+            cost=line_costs[product_id],
+            paymentStatus="created",
+            paidTo=products[product_id].addedBy,
+            paidBy=current_user.id,
+            razorpay_order_id=order["id"],
+        ))
+    session.add_all(new_payments)
     await session.commit()
-    await session.refresh(new_payment)
 
     return {
         "message": "Order created",
-        "payment_id": new_payment.id,
+        "payment_ids": [new_payment.id for new_payment in new_payments],
         "order_id": order["id"],
         "amount": amount,
         "currency": order["currency"],
@@ -327,11 +341,12 @@ async def verifyPayment(
     session: AsyncSession = Depends(get_db_session),
     current_user: Users = Depends(get_current_user)
 ):
-    payment = await get_user_payment(session, body.razorpay_order_id, current_user)
+    payments = await get_user_payments(session, body.razorpay_order_id, current_user)
+    payment_ids = [payment.id for payment in payments]
 
     # repeat calls (e.g. client retries) return the stored result instead of re-verifying
-    if payment.paymentStatus == "paid":
-        return {"message": "Payment already verified", "payment_id": payment.id}
+    if all(payment.paymentStatus == "paid" for payment in payments):
+        return {"message": "Payment already verified", "payment_ids": payment_ids}
 
     valid = is_signature_valid(
         client,
@@ -341,18 +356,20 @@ async def verifyPayment(
     )
 
     if not valid:
-        payment.paymentStatus = "failed"
+        for payment in payments:
+            payment.paymentStatus = "failed"
         await session.commit()
         raise HTTPException(status_code=400, detail="Payment verification failed")
 
-    payment.paymentStatus = "paid"
-    payment.razorpay_payment_id = body.razorpay_payment_id
+    for payment in payments:
+        payment.paymentStatus = "paid"
+        payment.razorpay_payment_id = body.razorpay_payment_id
     await session.commit()
 
     return {
         "message": "Payment successful",
-        "payment_id": payment.id,
-        "status": payment.paymentStatus,
+        "payment_ids": payment_ids,
+        "status": "paid",
     }
 
 
