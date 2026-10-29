@@ -38,10 +38,16 @@ class Token(BaseModel):
     token_type: str = "bearer"
 
 
-class PaymentRequest(BaseModel):
+class PaymentRequestStructure(BaseModel):
     # cost and status are decided by the server, never trusted from the client
-    product_id:int = Field(gt=0)
+    model_config = ConfigDict(populate_by_name=True)
+
+    product_id:int = Field(gt=0, alias="productId")
     quantity : int = Field(gt=0, le=100)
+
+
+class PaymentRequest(BaseModel):
+    PaymentRequest : list[PaymentRequestStructure] = Field(min_length=1, max_length=50)
 
 
 class VerifyPaymentRequest(BaseModel):
