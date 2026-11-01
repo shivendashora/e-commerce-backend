@@ -1,11 +1,15 @@
+import os
 from typing import AsyncGenerator
+from dotenv import load_dotenv
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine,AsyncEngine,async_sessionmaker,AsyncSession
 from sqlalchemy.orm import declarative_base
 
+load_dotenv()
 
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/e-commerce")
 
-engine:AsyncEngine = create_async_engine("postgresql+asyncpg://postgres:postgres@localhost:5432/e-commerce")
+engine:AsyncEngine = create_async_engine(DATABASE_URL)
 
 
 async_session_local = async_sessionmaker(

@@ -8,6 +8,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD [ "fastapi", "run", "app/main.py", "--proxy-headers", "--port", "80" ]
+RUN mkdir -p uploads
+
+CMD [ "fastapi", "run", "main.py", "--proxy-headers", "--port", "80" ]
 
 

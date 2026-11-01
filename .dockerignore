@@ -1,0 +1,8 @@
+# Secrets come from the ECS task definition, never the image
+.env
+
+.venv/
+__pycache__/
+*.pyc
+.git/
+uploads/
